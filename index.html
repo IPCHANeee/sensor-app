@@ -1,150 +1,190 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
-    <style>
-        body { 
-            margin: 0; 
-            background: #1a1a1a; 
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            font-family: Arial, sans-serif;
-            color: #00ff00;
-        }
-        #container {
-            width: 90%;
-            max-width: 500px;
-            text-align: center;
-        }
-        h2 {
-            margin: 20px 0;
-        }
-        canvas {
-            width: 100%;
-            height: 300px;
-            background: #000;
-            border: 2px solid #00ff00;
-            display: block;
-            margin: 20px 0;
-        }
-        #info {
-            font-size: 18px;
-            font-weight: bold;
-            margin-top: 20px;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>スマホの傾きセンサー｜画面の自動回転のしくみ</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%;
+    background: radial-gradient(circle at 50% 30%, #15233a 0%, #0a0f1a 70%);
+    font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", Arial, sans-serif;
+    color: #eaf2ff; overflow: hidden;
+  }
+  #app {
+    height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; padding: 16px; text-align: center;
+  }
+  h1 { font-size: 20px; margin: 0; font-weight: 800; letter-spacing: .02em; }
+  .sub { font-size: 13px; color: #8fa6c9; margin: -8px 0 4px; }
+
+  /* 3D ステージ */
+  .stage {
+    perspective: 900px;
+    width: 240px; height: 300px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* スマホ本体 */
+  .phone {
+    width: 150px; height: 300px;
+    border-radius: 28px;
+    background: linear-gradient(160deg, #2b3a55, #1a2336);
+    border: 2px solid #3a4a66;
+    box-shadow: 0 20px 50px rgba(0,0,0,.6), inset 0 0 0 6px #0e1626;
+    transform-style: preserve-3d;
+    transition: transform .06s linear;
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .notch {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    width: 50px; height: 7px; border-radius: 6px; background: #0a0f1a;
+  }
+  /* 画面（自動回転する中身） */
+  .screen {
+    width: 124px; height: 264px;
+    border-radius: 16px; overflow: hidden;
+    background: linear-gradient(180deg, #0f8cff, #0066d6);
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .ui {
+    transition: transform .45s cubic-bezier(.34,1.4,.5,1);
+    text-align: center; color: #fff;
+    width: 124px; /* 縦のときの幅 */
+  }
+  .ui.landscape { transform: rotate(-90deg); width: 264px; } /* 横向きに回転 */
+  .ui .big { font-size: 40px; }
+  .ui .label { font-size: 16px; font-weight: 800; margin-top: 4px; }
+  .ui .bar { height: 6px; width: 70%; margin: 10px auto 0; background: rgba(255,255,255,.55); border-radius: 4px; }
+  .ui .bar.short { width: 45%; }
+
+  /* 状態表示 */
+  .state {
+    display: flex; gap: 10px; align-items: stretch; justify-content: center;
+  }
+  .chip {
+    background: #142139; border: 1px solid #233453; border-radius: 14px;
+    padding: 10px 16px; min-width: 96px;
+  }
+  .chip .k { font-size: 11px; color: #7f98bd; }
+  .chip .v { font-size: 22px; font-weight: 800; margin-top: 2px; }
+  #orientChip { transition: background .3s, border-color .3s; }
+  #orientChip.land { background: #1b3a2a; border-color: #2f7d52; }
+
+  .hint { font-size: 12px; color: #6f86a8; max-width: 280px; line-height: 1.6; }
+  #start {
+    margin-top: 6px; padding: 14px 26px; font-size: 16px; font-weight: 800;
+    color: #061018; background: #46e0a0; border: none; border-radius: 999px;
+    cursor: pointer; box-shadow: 0 8px 24px rgba(70,224,160,.35);
+  }
+  #start:active { transform: scale(.97); }
+  .hidden { display: none !important; }
+</style>
 </head>
 <body>
-    <div id="container">
-        <h2>📱 スマホの加速度センサー</h2>
-        <canvas id="canvas"></canvas>
-        <div id="info">
-            <p id="status">スマホを振ってください</p>
-            <p id="values" style="font-size: 14px;"></p>
-        </div>
-    </div>
+<div id="app">
+  <h1>📱 スマホはどっち向き？</h1>
+  <div class="sub">画面が自動で回転する「あの技術」を見える化</div>
 
-    <script>
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const valuesDisplay = document.getElementById('values');
-        const statusDisplay = document.getElementById('status');
-        
-        const maxDataPoints = 100;
-        let dataX = [];
-        let dataY = [];
-        let dataZ = [];
-        
-        canvas.width = canvas.offsetWidth;
-        canvas.height = canvas.offsetHeight;
-        
-        // iOS13以降の権限要求
-        if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-            statusDisplay.innerHTML = '📍 「許可」をタップしてください';
-            statusDisplay.style.cursor = 'pointer';
-            statusDisplay.addEventListener('click', () => {
-                DeviceMotionEvent.requestPermission()
-                    .then(permissionState => {
-                        if (permissionState === 'granted') {
-                            statusDisplay.innerHTML = '✅ 動作中...';
-                            window.addEventListener('devicemotion', handleMotion);
-                        }
-                    })
-                    .catch(console.error);
-            });
-        } else {
-            // Android / iOS12以前
-            window.addEventListener('devicemotion', handleMotion);
-        }
-        
-        function handleMotion(event) {
-            const accel = event.acceleration;
-            
-            dataX.push(accel.x || 0);
-            dataY.push(accel.y || 0);
-            dataZ.push(accel.z || 0);
-            
-            if (dataX.length > maxDataPoints) {
-                dataX.shift();
-                dataY.shift();
-                dataZ.shift();
-            }
-            
-            valuesDisplay.innerHTML = `
-                <strong>X:</strong> ${(accel.x || 0).toFixed(2)} m/s²<br>
-                <strong>Y:</strong> ${(accel.y || 0).toFixed(2)} m/s²<br>
-                <strong>Z:</strong> ${(accel.z || 0).toFixed(2)} m/s²
-            `;
-        }
-        
-        function draw() {
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            const centerY = canvas.height / 2;
-            const xSpacing = canvas.width / maxDataPoints;
-            
-            // X軸（赤）
-            ctx.strokeStyle = '#ff3333';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            for (let i = 0; i < dataX.length; i++) {
-                const x = i * xSpacing;
-                const y = centerY - (dataX[i] * 25);
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-            }
-            ctx.stroke();
-            
-            // Y軸（緑）
-            ctx.strokeStyle = '#00ff00';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            for (let i = 0; i < dataY.length; i++) {
-                const x = i * xSpacing;
-                const y = centerY - (dataY[i] * 25);
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-            }
-            ctx.stroke();
-            
-            // Z軸（青）
-            ctx.strokeStyle = '#3366ff';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            for (let i = 0; i < dataZ.length; i++) {
-                const x = i * xSpacing;
-                const y = centerY - (dataZ[i] * 25);
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-            }
-            ctx.stroke();
-            
-            requestAnimationFrame(draw);
-        }
-        
-        draw();
-    </script>
+  <div class="stage">
+    <div class="phone" id="phone">
+      <div class="notch"></div>
+      <div class="screen">
+        <div class="ui" id="ui">
+          <div class="big" id="emoji">🧭</div>
+          <div class="label" id="screenLabel">たて</div>
+          <div class="bar"></div>
+          <div class="bar short"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="state">
+    <div class="chip" id="orientChip">
+      <div class="k">画面の向き</div>
+      <div class="v" id="orientText">たて</div>
+    </div>
+    <div class="chip">
+      <div class="k">左右の傾き</div>
+      <div class="v" id="gammaText">0°</div>
+    </div>
+    <div class="chip">
+      <div class="k">前後の傾き</div>
+      <div class="v" id="betaText">0°</div>
+    </div>
+  </div>
+
+  <button id="start">タップしてスタート</button>
+  <div class="hint" id="hint">スマホを傾けたり、横に倒してみてください。<br>傾きセンサーがリアルタイムに反応します。</div>
+</div>
+
+<script>
+  const phone = document.getElementById('phone');
+  const ui = document.getElementById('ui');
+  const emoji = document.getElementById('emoji');
+  const screenLabel = document.getElementById('screenLabel');
+  const orientText = document.getElementById('orientText');
+  const orientChip = document.getElementById('orientChip');
+  const gammaText = document.getElementById('gammaText');
+  const betaText = document.getElementById('betaText');
+  const startBtn = document.getElementById('start');
+  const hint = document.getElementById('hint');
+
+  function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+  function handleOrientation(e) {
+    // beta: 前後の傾き(-180〜180)  gamma: 左右の傾き(-90〜90)
+    const beta = e.beta || 0;
+    const gamma = e.gamma || 0;
+
+    // 手元のスマホの傾きに本体を連動（見やすいよう少し抑えめに）
+    const rotX = clamp(beta - 0, -60, 60);   // 前後
+    const rotY = clamp(gamma, -60, 60);       // 左右
+    phone.style.transform = `rotateX(${-rotX}deg) rotateY(${rotY}deg)`;
+
+    // 縦/横の判定：左右に大きく倒れたら「横」
+    const isLandscape = Math.abs(gamma) > 45 && Math.abs(beta) < 50;
+
+    if (isLandscape) {
+      ui.classList.add('landscape');
+      emoji.textContent = '🎬';
+      screenLabel.textContent = 'よこ';
+      orientText.textContent = 'よこ';
+      orientChip.classList.add('land');
+    } else {
+      ui.classList.remove('landscape');
+      emoji.textContent = '🧭';
+      screenLabel.textContent = 'たて';
+      orientText.textContent = 'たて';
+      orientChip.classList.remove('land');
+    }
+
+    gammaText.textContent = Math.round(gamma) + '°';
+    betaText.textContent = Math.round(beta) + '°';
+  }
+
+  function begin() {
+    window.addEventListener('deviceorientation', handleOrientation);
+    startBtn.classList.add('hidden');
+    hint.innerHTML = 'スマホを<b>横に倒す</b>と、画面の中身がクルッと回ります🔄';
+  }
+
+  startBtn.addEventListener('click', () => {
+    // iOS 13+ は許可が必要
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function') {
+      DeviceOrientationEvent.requestPermission()
+        .then(state => { if (state === 'granted') begin(); else hint.textContent = 'センサーの利用が許可されませんでした。'; })
+        .catch(() => hint.textContent = 'この端末ではセンサーを利用できません。');
+    } else {
+      // Android / PC など
+      begin();
+    }
+  });
+</script>
 </body>
 </html>
